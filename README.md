@@ -163,7 +163,3 @@ build.bat            # installs pyinstaller/pystray/Pillow, outputs dist\Kalikot
   [`codex-profiles`](https://github.com/midhunmonachan/codex-profiles) (MIT © Midhun
   Monachan). Neither is bundled or forked — both stay on your machine as separate
   CLIs; switching itself only needs `aisw`.
-
-## 👨‍💻 Author
-
-**John Venice Almazan** — [@kalikot26](https://github.com/kalikot26)
