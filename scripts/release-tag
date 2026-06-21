@@ -1,0 +1,137 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+tag_re='^v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)(\.[0-9]+)?)?$'
+
+ensure_clean_worktree() {
+  if [[ -n "$(git status --porcelain=v1 --untracked-files=normal)" ]]; then
+    echo "Working tree has uncommitted or untracked changes" >&2
+    exit 1
+  fi
+}
+
+usage() {
+  cat <<'EOF'
+Usage: scripts/release-tag [--bump patch|minor|major]
+
+If --bump is provided, the script updates Cargo.toml and package.json
+(version + optionalDependencies), commits the version bump, and creates the tag.
+EOF
+}
+
+bump=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --bump)
+      if [[ $# -lt 2 ]]; then
+        echo "Missing value for --bump (use patch|minor|major)" >&2
+        exit 1
+      fi
+      bump="${2:-}"
+      shift 2
+      ;;
+    --bump=*)
+      bump="${1#*=}"
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "Unknown argument: $1" >&2
+      usage
+      exit 1
+      ;;
+  esac
+done
+
+cargo_ver=$(grep -m1 '^version' Cargo.toml | sed -E 's/version *= *"([^"]+)".*/\1/')
+npm_ver=$(python3 - <<'PY'
+import json
+with open("package.json", "r", encoding="utf-8") as fh:
+    print(json.load(fh)["version"])
+PY
+)
+
+if [[ "$cargo_ver" != "$npm_ver" ]]; then
+  echo "Cargo.toml (${cargo_ver}) and package.json (${npm_ver}) versions differ" >&2
+  exit 1
+fi
+
+if [[ -n "$bump" ]]; then
+  if [[ "$cargo_ver" == *-* ]]; then
+    echo "Cannot bump prerelease version (${cargo_ver}) automatically" >&2
+    exit 1
+  fi
+  ensure_clean_worktree
+
+  IFS='.' read -r major minor patch <<<"$cargo_ver"
+  case "$bump" in
+    patch)
+      patch=$((patch + 1))
+      ;;
+    minor)
+      minor=$((minor + 1))
+      patch=0
+      ;;
+    major)
+      major=$((major + 1))
+      minor=0
+      patch=0
+      ;;
+    *)
+      echo "Invalid bump '${bump}'. Use patch, minor, or major." >&2
+      exit 1
+      ;;
+  esac
+
+  new_ver="${major}.${minor}.${patch}"
+  python3 - <<PY
+import re
+from pathlib import Path
+
+path = Path("Cargo.toml")
+text = path.read_text(encoding="utf-8")
+replacement = r'\g<1>${new_ver}\g<3>'
+text, count = re.subn(r'^(version\s*=\s*")([^"]+)("\s*)$', replacement, text, count=1, flags=re.M)
+if count != 1:
+    raise SystemExit("Failed to update version in Cargo.toml")
+path.write_text(text, encoding="utf-8")
+PY
+  python3 - <<PY
+import json
+from pathlib import Path
+
+path = Path("package.json")
+data = json.loads(path.read_text(encoding="utf-8"))
+data["version"] = "${new_ver}"
+if "optionalDependencies" in data:
+    data["optionalDependencies"] = {
+        k: "${new_ver}" for k in data["optionalDependencies"]
+    }
+path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+PY
+  git add Cargo.toml package.json
+  git commit -m "chore: bump version to v${new_ver}"
+
+  cargo_ver="${new_ver}"
+fi
+
+tag="v${cargo_ver}"
+
+if [[ ! "$tag" =~ $tag_re ]]; then
+  echo "Tag '${tag}' does not match vX.Y.Z or vX.Y.Z-alpha.N" >&2
+  exit 1
+fi
+
+ensure_clean_worktree
+
+if git rev-parse -q --verify "refs/tags/${tag}" >/dev/null; then
+  echo "Tag ${tag} already exists" >&2
+  exit 1
+fi
+
+git tag -a "${tag}" -m "${tag}"
+echo "Created tag ${tag}"
+echo "Push with: git push origin ${tag}"

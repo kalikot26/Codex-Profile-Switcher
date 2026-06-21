@@ -1,0 +1,27 @@
+{
+  "name": "codex-profiles",
+  "version": "0.3.0",
+  "description": "Seamlessly switch between multiple Codex accounts",
+  "license": "MIT",
+  "bin": {
+    "codex-profiles": "bin/codex-profiles.js"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "optionalDependencies": {
+    "codex-profiles-darwin-arm64": "0.3.0",
+    "codex-profiles-darwin-x64": "0.3.0",
+    "codex-profiles-linux-arm64": "0.3.0",
+    "codex-profiles-linux-x64": "0.3.0",
+    "codex-profiles-win32-x64": "0.3.0"
+  },
+  "files": [
+    "bin"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/midhunmonachan/codex-profiles.git"
+  }
+}

@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+tag_re='^v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)(\.[0-9]+)?)?$'
+
+cargo_ver=$(grep -m1 '^version' Cargo.toml | sed -E 's/version *= *"([^"]+)".*/\1/')
+npm_ver=$(python3 - <<'PY'
+import json
+with open("package.json", "r", encoding="utf-8") as fh:
+    print(json.load(fh)["version"])
+PY
+)
+
+has_tag=0
+invalid=0
+
+while read -r local_ref local_sha _remote_ref _remote_sha; do
+  if [[ "$local_ref" == refs/tags/* ]]; then
+    if [[ "$local_sha" == 0000000000000000000000000000000000000000 ]]; then
+      continue
+    fi
+
+    tag="${local_ref#refs/tags/}"
+    has_tag=1
+
+    if [[ ! "$tag" =~ $tag_re ]]; then
+      echo "Tag '${tag}' does not match vX.Y.Z or vX.Y.Z-alpha.N" >&2
+      invalid=1
+      continue
+    fi
+
+    tag_ver="${tag#v}"
+    if [[ "$cargo_ver" != "$npm_ver" ]]; then
+      echo "Cargo.toml (${cargo_ver}) and package.json (${npm_ver}) versions differ" >&2
+      invalid=1
+    elif [[ "$tag_ver" != "$cargo_ver" ]]; then
+      echo "Tag ${tag_ver} does not match Cargo.toml (${cargo_ver}) and package.json (${npm_ver})" >&2
+      invalid=1
+    fi
+  fi
+done
+
+if [[ "$has_tag" -ne 0 && "$invalid" -ne 0 ]]; then
+  exit 1
+fi
+
+scripts/check.sh

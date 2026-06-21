@@ -1,0 +1,5 @@
+[profile.default]
+status-level = "fail"
+final-status-level = "fail"
+failure-output = "immediate"
+success-output = "never"

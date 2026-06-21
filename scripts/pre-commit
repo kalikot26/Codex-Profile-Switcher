@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+staged_files=$(git diff --cached --name-only)
+if [[ -n "${staged_files}" ]]; then
+  ignored=$(printf '%s\n' "${staged_files}" | git check-ignore --stdin || true)
+  if [[ -n "${ignored}" ]]; then
+    echo "Ignored files are staged; remove them before committing:" >&2
+    echo "${ignored}" >&2
+    exit 1
+  fi
+fi
+
+scripts/check.sh

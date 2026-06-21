@@ -1,0 +1,7 @@
+# Optional: system-tray support (minimize-to-tray when closing the window).
+# If not installed the app still works — X just quits the process.
+pystray>=0.19
+Pillow>=10.0
+
+# Build tool
+pyinstaller>=6.0

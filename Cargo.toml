@@ -1,0 +1,43 @@
+[package]
+name = "codex-profiles"
+version = "0.3.0"
+edition = "2024"
+rust-version = "1.94"
+license = "MIT"
+description = "Seamlessly switch between multiple Codex accounts"
+repository = "https://github.com/midhunmonachan/codex-profiles"
+homepage = "https://github.com/midhunmonachan/codex-profiles"
+documentation = "https://docs.rs/codex-profiles"
+readme = "README.md"
+keywords = ["codex", "cli", "profile", "auth", "openai"]
+categories = ["command-line-utilities", "authentication"]
+exclude = [
+    ".github/",
+    "scripts/",
+    "bin/",
+    "dist/",
+    "target/",
+    "*.profraw",
+    "*.profdata",
+    "coverage/",
+    "lcov.info",
+]
+
+[dependencies]
+base64 = "0.22"
+chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4.5", features = ["derive"] }
+colored = "3.1"
+directories = "6.0"
+fslock = "0.2"
+inquire = "0.9"
+rayon = "1.11"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_with = "3.16"
+shlex = "1.3"
+supports-color = "3.0"
+ureq = { version = "3.2", features = ["json"] }
+
+[dev-dependencies]
+tempfile = "3.25"
