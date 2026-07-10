@@ -55,7 +55,14 @@ CODEX_HOME         = Path.home() / ".codex"
 CODEX_AUTH         = CODEX_HOME / "auth.json"
 CODEX_GLOBAL_STATE = CODEX_HOME / ".codex-global-state.json"
 AISW_HOME          = Path.home() / ".aisw"
-CODEX_PROCESS_NAME = "Codex"
+# The combined app: OpenAI merged Codex into the ChatGPT desktop app. The package
+# is still OpenAI.Codex (so the launch AUMID is unchanged), but the main process
+# is now ChatGPT.exe — the old Codex.exe is only a bundled child helper. Killing/
+# detecting Codex.exe therefore missed the real app (stop/start mismatch) AND broke
+# the "is it running" safety gate. Target the real main process. (The old ChatGPT
+# desktop is now "ChatGPT Classic.exe", a different image, so no collision. The
+# Codex CLI binary is codex.exe/node, also unaffected.)
+CODEX_PROCESS_NAME = "ChatGPT"
 
 SINGLE_INSTANCE_MUTEX = "Local\\KalikotAISWv2SingleInstance"
 IPC_HOST    = "127.0.0.1"
