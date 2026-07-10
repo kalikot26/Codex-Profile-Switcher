@@ -5,6 +5,7 @@ import json
 import os
 import queue
 import re
+import shlex
 import shutil
 import socket
 import subprocess
@@ -63,6 +64,19 @@ AISW_HOME          = Path.home() / ".aisw"
 # desktop is now "ChatGPT Classic.exe", a different image, so no collision. The
 # Codex CLI binary is codex.exe/node, also unaffected.)
 CODEX_PROCESS_NAME = "ChatGPT"
+
+# --- Platform (Windows + macOS) --------------------------------------------
+# The aisw engine is cross-platform; only this GUI's OS integration differs, and
+# the paths above (~/.codex, ~/.aisw) are identical on both OSes. The macOS
+# desktop-app identity below must be VERIFIED on the Mac (see MACOS_SETUP.md):
+#   process name:  pgrep -l -i chatgpt                  -> set MACOS_PROC_NAME
+#   bundle id:     osascript -e 'id of app "ChatGPT"'   -> set MACOS_APP_BUNDLE_ID
+IS_WIN = os.name == "nt"
+IS_MAC = sys.platform == "darwin"
+
+MACOS_APP_NAME      = "ChatGPT"           # `open -a` fallback launch
+MACOS_APP_BUNDLE_ID = "com.openai.chat"   # `open -b` primary launch (confirm on Mac)
+MACOS_PROC_NAME     = "ChatGPT"           # pgrep/pkill target (confirm on Mac)
 
 SINGLE_INSTANCE_MUTEX = "Local\\KalikotAISWv2SingleInstance"
 IPC_HOST    = "127.0.0.1"
@@ -133,21 +147,62 @@ def _find_codex_family_name() -> Optional[str]:
         return None
 
 def _is_codex_running() -> bool:
-    if os.name != "nt":
-        return False
     try:
-        r = subprocess.run(
-            ["tasklist", "/FI", f"IMAGENAME eq {CODEX_PROCESS_NAME}.exe", "/NH"],
-            capture_output=True, text=True, creationflags=0x08000000, timeout=5)
-        return f"{CODEX_PROCESS_NAME}.exe" in r.stdout
+        if IS_WIN:
+            r = subprocess.run(
+                ["tasklist", "/FI", f"IMAGENAME eq {CODEX_PROCESS_NAME}.exe", "/NH"],
+                capture_output=True, text=True, creationflags=0x08000000, timeout=5)
+            return f"{CODEX_PROCESS_NAME}.exe" in r.stdout
+        if IS_MAC:
+            r = subprocess.run(["pgrep", "-x", MACOS_PROC_NAME],
+                               capture_output=True, text=True, timeout=5)
+            return r.returncode == 0 and bool(r.stdout.strip())
     except Exception:
-        return False
+        pass
+    return False
 
 def _kill_codex() -> None:
-    subprocess.run(
-        ["taskkill", "/F", "/IM", f"{CODEX_PROCESS_NAME}.exe", "/T"],
-        capture_output=True, creationflags=0x08000000)
+    try:
+        if IS_WIN:
+            subprocess.run(
+                ["taskkill", "/F", "/IM", f"{CODEX_PROCESS_NAME}.exe", "/T"],
+                capture_output=True, creationflags=0x08000000)
+        elif IS_MAC:
+            # graceful quit first (lets the app flush), then force-kill stragglers
+            subprocess.run(
+                ["osascript", "-e", f'tell application "{MACOS_APP_NAME}" to quit'],
+                capture_output=True, text=True)
+            time.sleep(0.6)
+            subprocess.run(["pkill", "-x", MACOS_PROC_NAME], capture_output=True)
+    except Exception:
+        pass
     time.sleep(0.8)
+
+def _launch_desktop_app(family_name: Optional[str]) -> None:
+    """Launch the Codex/ChatGPT desktop app. Windows: Appx AUMID; macOS: bundle id."""
+    try:
+        if IS_WIN and family_name:
+            subprocess.Popen(["explorer.exe", f"shell:AppsFolder\\{family_name}!App"],
+                             creationflags=0x08000000)
+        elif IS_MAC:
+            r = subprocess.run(["open", "-b", MACOS_APP_BUNDLE_ID],
+                               capture_output=True, text=True)
+            if r.returncode != 0:                      # bundle id wrong/absent
+                subprocess.run(["open", "-a", MACOS_APP_NAME], capture_output=True)
+    except Exception:
+        pass
+
+def _open_path(p) -> None:
+    """Reveal a file/folder in the OS file manager."""
+    try:
+        if IS_WIN:
+            subprocess.Popen(["explorer.exe", str(p)])
+        elif IS_MAC:
+            subprocess.Popen(["open", str(p)])
+        else:
+            subprocess.Popen(["xdg-open", str(p)])
+    except Exception:
+        pass
 
 def _sanitize_codex_config() -> bool:
     """Ensure `cli_auth_credentials_store` is a TOP-LEVEL key, not under [features].
@@ -496,7 +551,7 @@ def _launch_cli_session(aisw_name: str, display: str, workspace: Optional[str] =
     """
     codex = _codex_cli_command()
     if not codex:
-        raise RuntimeError("Codex CLI not found on PATH (expected 'codex.cmd').")
+        raise RuntimeError("Codex CLI not found on PATH (expected 'codex').")
 
     home = _prepare_instance_home(aisw_name)
     ws   = workspace or str(Path.home())
@@ -508,6 +563,27 @@ def _launch_cli_session(aisw_name: str, display: str, workspace: Optional[str] =
         pid_file.unlink()
     except OSError:
         pass
+
+    # ── macOS: run the session in Terminal via a small shell launcher ────────
+    if IS_MAC:
+        sh = home / "_session.sh"
+        sh.write_text(
+            "#!/bin/bash\n"
+            f"printf '\\033]0;%s\\007' {shlex.quote(title)}\n"   # lock the window title
+            f"export CODEX_HOME={shlex.quote(str(home))}\n"
+            f"echo $$ > {shlex.quote(str(pid_file))}\n"          # record live PID
+            f"cd {shlex.quote(ws)}\n"
+            f"exec {shlex.quote(codex)}\n",                      # becomes codex (same PID)
+            encoding="utf-8")
+        try:
+            sh.chmod(0o755)
+        except OSError:
+            pass
+        try:
+            subprocess.Popen(["open", "-a", "Terminal", str(sh)])
+            return f"Launched CLI session for '{display}'."
+        except Exception as exc:
+            raise RuntimeError(f"Could not launch Terminal: {exc}")
 
     # Write a per-session PowerShell launcher into the instance home.
     # PowerShell exposes $PID, letting us record the live window's process id.
@@ -554,20 +630,27 @@ def _launch_cli_session(aisw_name: str, display: str, workspace: Optional[str] =
 # ---------------------------------------------------------------------------
 
 def _running_pids() -> set[int]:
-    """Return the set of currently running process IDs (one tasklist call)."""
+    """Return the set of currently running process IDs."""
     pids: set[int] = set()
-    if os.name != "nt":
-        return pids
     try:
-        r = subprocess.run(["tasklist", "/FO", "CSV", "/NH"],
-                           capture_output=True, text=True,
-                           creationflags=0x08000000, timeout=8)
-        for line in r.stdout.splitlines():
-            # CSV: "image","PID","session","#","mem"
-            parts = line.split('","')
-            if len(parts) >= 2:
+        if IS_WIN:
+            r = subprocess.run(["tasklist", "/FO", "CSV", "/NH"],
+                               capture_output=True, text=True,
+                               creationflags=0x08000000, timeout=8)
+            for line in r.stdout.splitlines():
+                # CSV: "image","PID","session","#","mem"
+                parts = line.split('","')
+                if len(parts) >= 2:
+                    try:
+                        pids.add(int(parts[1].strip('"').strip()))
+                    except ValueError:
+                        pass
+        else:  # macOS / Linux
+            r = subprocess.run(["ps", "-axo", "pid="],
+                               capture_output=True, text=True, timeout=8)
+            for tok in r.stdout.split():
                 try:
-                    pids.add(int(parts[1].strip('"').strip()))
+                    pids.add(int(tok))
                 except ValueError:
                     pass
     except Exception:
@@ -1447,9 +1530,7 @@ class ProfileSwitcherApp:
             if relaunch:
                 _clean_codex_state()
                 _sanitize_codex_config()
-                subprocess.Popen(
-                    ["explorer.exe", f"shell:AppsFolder\\{self.codex_family_name}!App"],
-                    creationflags=0x08000000)
+                _launch_desktop_app(self.codex_family_name)
                 time.sleep(2)   # let it come up
             return target_display
 
@@ -1778,9 +1859,7 @@ class ProfileSwitcherApp:
                 _kill_codex()
             _clean_codex_state()      # ← prevents heartbeat token-refresh storm
             _sanitize_codex_config()  # ← prevents [features] boolean crash
-            subprocess.Popen(
-                ["explorer.exe", f"shell:AppsFolder\\{self.codex_family_name}!App"],
-                creationflags=0x08000000)
+            _launch_desktop_app(self.codex_family_name)
             time.sleep(2)
 
         def done(_: None) -> None:
@@ -1975,7 +2054,7 @@ class ProfileSwitcherApp:
 
         _refresh_health()
         ttk.Button(win, text="Open log folder",
-                   command=lambda: subprocess.Popen(["explorer.exe", str(CACHE_DIR)])
+                   command=lambda: _open_path(CACHE_DIR)
                    ).pack(side="left", padx=10, pady=(0, 8))
         ttk.Button(win, text="Close", command=_on_close).pack(side="right", padx=10, pady=(0, 8))
 

@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -230,7 +231,18 @@ def send_windows_toast(title: str, message: str) -> bool:
     Returns True if the PowerShell process was spawned successfully.
     This is not a delivery guarantee — if Do Not Disturb is on, Windows
     may suppress the popup but still log it in the Action Center.
+
+    On macOS it sends a native notification via osascript instead.
     """
+    if sys.platform == "darwin":
+        try:
+            subprocess.Popen(
+                ["osascript", "-e",
+                 f"display notification {json.dumps(message)} "
+                 f"with title {json.dumps(title)}"])
+            return True
+        except Exception:
+            return False
     if os.name != "nt":
         return False
     try:
