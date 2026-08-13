@@ -460,11 +460,46 @@ def _resolve_codex_id(aisw_name: str) -> Optional[str]:
     return None
 
 
+def _cli_search_dirs() -> list[Path]:
+    """Fallback install roots to probe when a CLI is not on PATH.
+
+    `aisw` and `codex-profiles` usually land in a node-version-scoped nvm folder,
+    which drops off PATH the moment nvm switches versions.  The binary is still on
+    disk, but every call fails — and because a failed `list` renders as an empty
+    tree, that silently blanked the entire profile list.  Probing the usual roots
+    (newest node version first) makes a version switch harmless.
+    """
+    home = Path.home()
+    dirs = [home / ".local" / "bin", home / ".cargo" / "bin"]
+
+    def _versioned(parent: Path, sub: str = "") -> list[Path]:
+        # numeric sort — a plain reverse sort ranks "v9" above "v24"
+        vers = sorted((d for d in parent.glob("v*") if d.is_dir()),
+                      key=lambda d: [int(x) for x in re.findall(r"\d+", d.name)[:3]],
+                      reverse=True)
+        return [(d / sub if sub else d) for d in vers]
+
+    if IS_WIN:
+        if os.environ.get("APPDATA"):
+            dirs.append(Path(os.environ["APPDATA"]) / "npm")
+        if os.environ.get("LOCALAPPDATA"):
+            dirs += _versioned(Path(os.environ["LOCALAPPDATA"]) / "nvm")
+    else:
+        dirs += [Path("/opt/homebrew/bin"), Path("/usr/local/bin")]
+        dirs += _versioned(home / ".nvm" / "versions" / "node", "bin")
+    return dirs
+
+
 def _find_cli(names: list[str]) -> list[str]:
     for n in names:
         found = shutil.which(n)
         if found:
             return [found]
+    for d in _cli_search_dirs():       # not on PATH — look where it usually installs
+        for n in names:
+            cand = d / n
+            if cand.is_file():
+                return [str(cand)]
     return [names[0]]
 
 AISW_PREFIX = _find_cli(["aisw.exe", "aisw.cmd", "aisw"])
@@ -1237,9 +1272,10 @@ class ProfileSwitcherApp:
 
         def work() -> dict:
             # 1 — list aisw profiles (local config read, zero API calls)
-            rc, out, _ = run_aisw(["list", "--json"])
+            rc, out, err = run_aisw(["list", "--json"])
             if rc != 0:
-                raise RuntimeError(out or "aisw list failed")
+                # stderr carries the real reason (e.g. "aisw.exe not found in PATH")
+                raise RuntimeError(err or out or "aisw list failed")
             profs, active = _parse_aisw_profiles(out)
 
             # 2 — usage only for selected profile
